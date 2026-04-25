@@ -1,9 +1,35 @@
+"use client";
+
+import { useMemo } from "react";
 import BottomNav from "../components/BottomNav";
 import ItineraryCard from "../components/ItineraryCard";
-import { ITINERARIES } from "../data/itineraries";
+import type { Itinerary as CardItinerary } from "../data/itineraries";
+import type { DecisionAnalysis } from "../data/newtypes";
+import { readDecisionAnalysisDictionary } from "../lib/decision-analysis-storage";
+
+function toCardItinerary(key: string, analysis: DecisionAnalysis): CardItinerary {
+  const primary =
+    analysis.options.find((option) => option.id === analysis.primaryRecommendationId) ?? analysis.options[0];
+
+  return {
+    id: key,
+    title: primary?.title ?? "AI Generated Itinerary",
+    tagline: primary?.tagline ?? analysis.economicRationale,
+    city: "AI Generated",
+    country: "From Your Answers",
+    duration: `${primary?.days.length ?? 0} days`,
+    vibe: primary?.vibe ?? ["AI"],
+    coverEmoji: primary?.coverEmoji ?? "🧭",
+    gradient: primary?.gradient ?? "from-cyan-700 to-blue-800",
+    days: [],
+  };
+}
 
 export default function SavedPage() {
-  const saved = [ITINERARIES[0], ITINERARIES[2]];
+  const saved = useMemo(() => {
+    const dictionary = readDecisionAnalysisDictionary();
+    return Object.entries(dictionary).map(([key, analysis]) => toCardItinerary(key, analysis));
+  }, []);
 
   return (
     <div className="app-shell pb-24">
