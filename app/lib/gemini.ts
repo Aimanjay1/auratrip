@@ -2,20 +2,106 @@ import "server-only";
 
 import type { Answer, DecisionAnalysis, Itinerary, Stop } from "../data/newtypes";
 import { ITINERARIES } from "../data/itineraries";
+import { searchNearbyStops } from "../helper/placesAPI";
 
 const GEMINI_MODEL = process.env.GEMINI_MODEL ?? "gemini-2.5-flash";
+const DEFAULT_STOPS_POOL_LIMIT = 16;
 
-function buildPrompt(answer: Answer): string {
+type LatLng = {
+    lat: number;
+    lng: number;
+};
+
+type GeocodeApiResponse = {
+    results?: {
+        geometry?: {
+            location?: LatLng;
+        };
+    }[];
+};
+
+function buildPrompt(answer: Answer, rawDataPool: string): string {
     return [
-        "You are an itinerary optimization assistant.",
+        "You are AuraTrip's economic trade-off analyzer for travelers.",
+        "Treat this as a financial decision engine, not a generic planner.",
+        "travelWith, tripLength, and budget are numeric and must be used in calculations.",
+        "Budget is the hard maximum in MYR for the entire trip and must not be exceeded for the optimized route.",
+        `User destination: ${answer.destination}`,
+        `Party size: ${answer.travelWith}`,
+        `Trip length (days): ${answer.tripLength}`,
+        `Budget (MYR): ${answer.budget}`,
+        `Accommodation preference: ${answer.accommodation}`,
+        `Food style: ${answer.foodStyle}`,
+        `Avoids: ${answer.avoids.join(", ") || "None"}`,
+        `Interests: ${answer.interests.join(", ") || "None"}`,
+        "Use ONLY places from the provided data pool for itinerary stops.",
+        "Data pool contains structured pricing/distance proxies and AI review summaries.",
+        "You must identify hidden cost traps (queue delays, surge-prone transport, tourist trap pricing).",
+        "Generate exactly 3 options with distinct trade-offs: optimized, naive, austerity.",
+        "Compute hiddenCostsAvoided as naive.totalCost - optimized.totalCost (never negative).",
+        "Maximize local SME allocation in optimized and austerity variants when feasible.",
         "Return ONLY JSON that matches this TypeScript type:",
         "{ analysisId: string; userBudget: number; primaryRecommendationId: string; economicRationale: string; hiddenCostsAvoided: number; options: Itinerary[] }",
         "Where Itinerary is:",
         "{ id: string; title: string; tagline: string; totalCost: number; vibe: string[]; coverEmoji: string; gradient: string; days: { label: string; stops: { time: string; name: string; category: string; duration: string; mapUrl: string; address: string; costEstimate: number; isLocalSme: boolean; aiInsight?: string }[] }[] }",
-        "Create 3 options with distinct trade-offs: optimized, naive, austerity.",
+        "Every itinerary must include at least one day and at least three stops.",
         "Input user answers JSON:",
         JSON.stringify(answer),
+        "Live place data pool JSON:",
+        rawDataPool,
     ].join("\n");
+}
+
+async function geocodeDestination(destination: string, apiKey: string): Promise<LatLng | null> {
+    const url = `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(destination)}&key=${apiKey}`;
+    const response = await fetch(url);
+
+    if (!response.ok) {
+        console.warn("[GeminiHelper] Geocode request failed.", {
+            status: response.status,
+            destination,
+        });
+        return null;
+    }
+
+    const payload = (await response.json()) as GeocodeApiResponse;
+    const location = payload.results?.[0]?.geometry?.location;
+    if (!location || typeof location.lat !== "number" || typeof location.lng !== "number") {
+        console.warn("[GeminiHelper] Geocode returned no usable location.", { destination });
+        return null;
+    }
+
+    return location;
+}
+
+async function fetchNearbyDataPool(answer: Answer): Promise<Stop[]> {
+    const placesApiKey = process.env.GOOGLE_PLACES_KEY ?? process.env.GOOGLE_MAPS_API_KEY;
+    const destination = answer.destination.trim();
+
+    if (!placesApiKey || !destination) {
+        console.log("[GeminiHelper] Places API key or destination missing. Skipping Places enrichment.");
+        return [];
+    }
+
+    const location = await geocodeDestination(destination, placesApiKey);
+    if (!location) {
+        return [];
+    }
+
+    try {
+        const [restaurants, hotels, attractions] = await Promise.all([
+            searchNearbyStops(placesApiKey, location.lat, location.lng, "restaurant", 2000, 5),
+            searchNearbyStops(placesApiKey, location.lat, location.lng, "lodging", 3000, 3),
+            searchNearbyStops(placesApiKey, location.lat, location.lng, "tourist_attraction", 4000, 4),
+        ]);
+
+        return [...restaurants, ...hotels, ...attractions]
+            .filter((stop) => Boolean(stop.name && stop.mapUrl))
+            .slice(0, DEFAULT_STOPS_POOL_LIMIT);
+    } catch (error) {
+        console.warn("[GeminiHelper] Places enrichment failed. Continuing without live places pool.", error);
+        return [];
+    }
 }
 
 function extractJson(text: string): string {
@@ -91,20 +177,23 @@ function toDecisionItinerary(source: (typeof ITINERARIES)[number], variant: "opt
 }
 
 function fallbackDecisionAnalysis(answer: Answer): DecisionAnalysis {
-    const options: Itinerary[] = [
+    const baseOptions: Itinerary[] = [
         toDecisionItinerary(ITINERARIES[0], "optimized"),
         toDecisionItinerary(ITINERARIES[1], "naive"),
         toDecisionItinerary(ITINERARIES[2], "austerity"),
     ];
 
-    const budgetMap: Record<string, number> = {
-        "Budget-friendly": 600,
-        "Mid-range": 1200,
-        "Comfortable splurge": 2200,
-        "Go all out": 4000,
-    };
+    const partySize = Math.max(1, Math.floor(answer.travelWith || 1));
+    const tripDays = Math.max(1, Math.floor(answer.tripLength || 1));
+    const userBudget = Math.max(100, Math.floor(answer.budget || 1200));
 
-    const userBudget = budgetMap[answer.budget] ?? 1200;
+    const partyMultiplier = 0.6 + partySize * 0.4;
+    const durationMultiplier = Math.max(1, tripDays / 2);
+    const options = baseOptions.map((option) => ({
+        ...option,
+        totalCost: Math.round(option.totalCost * partyMultiplier * durationMultiplier),
+    }));
+
     const primaryRecommendation = options[0];
     const hiddenCostsAvoided = Math.max(0, options[1].totalCost - primaryRecommendation.totalCost);
 
@@ -140,11 +229,13 @@ export async function generateDecisionAnalysisWithGemini(answer: Answer): Promis
         return fallbackDecisionAnalysis(answer);
     }
 
-    const prompt = buildPrompt(answer);
+    const nearbyStops = await fetchNearbyDataPool(answer);
+    const prompt = buildPrompt(answer, JSON.stringify(nearbyStops));
     console.log("[GeminiHelper] Sending generateContent request", {
         model: GEMINI_MODEL,
         destination: answer.destination,
         budget: answer.budget,
+        nearbyStopCount: nearbyStops.length,
     });
 
     try {

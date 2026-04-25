@@ -2,10 +2,10 @@
 
 export type Answer = {
     destination: string;
-    travelWith: string;
-    tripLength: string;
+    travelWith: number;
+    tripLength: number;
     pace: string;
-    budget: string;
+    budget: number;
     interests: string[];
     accommodation: string;
     foodStyle: string;

@@ -107,12 +107,12 @@ export default function ItineraryPage() {
             value: `$${formatMoney(analysis.userBudget)}`,
             tone: { background: "#e8f4fd", border: "#bddff5", color: "#1f4f73" },
           },
-          {
-            icon: "🛡️",
-            title: "Savings",
-            value: `$${formatMoney(analysis.hiddenCostsAvoided)}`,
-            tone: { background: "#e9f9f0", border: "#bde7cd", color: "#1f6a46" },
-          },
+          // {
+          //   icon: "🛡️",
+          //   title: "Savings",
+          //   value: `$${formatMoney(analysis.hiddenCostsAvoided)}`,
+          //   tone: { background: "#e9f9f0", border: "#bde7cd", color: "#1f6a46" },
+          // },
           {
             icon: "🧠",
             title: "Options",

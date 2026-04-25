@@ -8,6 +8,7 @@ import { upsertDecisionAnalysis } from "../lib/decision-analysis-storage";
 
 /* ─── Types ─────────────────────────────────────────────────── */
 type FlowStep = "quiz" | "loading" | "result";
+const NUMERIC_QUESTION_IDS = new Set(["travelWith", "tripLength", "budget"]);
 
 /* ─── Quiz questions ─────────────────────────────────────────── */
 const QUESTIONS = [
@@ -24,29 +25,19 @@ const QUESTIONS = [
     id: "travelWith",
     step: 2,
     emoji: "👥",
-    title: "Who are you travelling with?",
-    subtitle: "This shapes the whole trip.",
-    type: "single" as const,
-    options: [
-      { label: "Just me", icon: "🙋" },
-      { label: "My partner", icon: "💑" },
-      { label: "Friends", icon: "🤝" },
-      { label: "Family", icon: "👨‍👩‍👧" },
-    ],
+    title: "How many people are travelling?",
+    subtitle: "We need the exact party size to calculate total costs.",
+    type: "text" as const,
+    placeholder: "e.g. 1, 2, 4...",
   },
   {
     id: "tripLength",
     step: 3,
     emoji: "📅",
-    title: "How long is your trip?",
-    subtitle: "We'll pack in just the right amount.",
-    type: "single" as const,
-    options: [
-      { label: "Weekend (2 days)", icon: "⚡" },
-      { label: "Short trip (3–4 days)", icon: "🎒" },
-      { label: "One week", icon: "✈️" },
-      { label: "Two weeks+", icon: "🗺️" },
-    ],
+    title: "How many days is your trip?",
+    subtitle: "Used to calculate your daily allowable budget.",
+    type: "text" as const,
+    placeholder: "e.g. 3",
   },
   {
     id: "pace",
@@ -65,15 +56,10 @@ const QUESTIONS = [
     id: "budget",
     step: 5,
     emoji: "💳",
-    title: "What's your budget feel?",
-    subtitle: "No judgement — just helps us pick the right spots.",
-    type: "single" as const,
-    options: [
-      { label: "Budget-friendly", icon: "🪙" },
-      { label: "Mid-range", icon: "💵" },
-      { label: "Comfortable splurge", icon: "✨" },
-      { label: "Go all out", icon: "💎" },
-    ],
+    title: "What is your strict maximum budget?",
+    subtitle: "Enter the total MYR amount. We will optimize to stay under this.",
+    type: "text" as const,
+    placeholder: "e.g. 1500",
   },
   {
     id: "interests",
@@ -163,10 +149,10 @@ const RESULT = {
 /* ─── Default answers ────────────────────────────────────────── */
 const defaultAnswers: Answer = {
   destination: "",
-  travelWith: "",
-  tripLength: "",
+  travelWith: 0,
+  tripLength: 0,
   pace: "",
-  budget: "",
+  budget: 0,
   interests: [],
   accommodation: "",
   foodStyle: "",
@@ -185,10 +171,10 @@ export default function GeneratePage() {
   const isLast = qIndex === QUESTIONS.length - 1;
 
   /* Helpers */
-  function getAnswer(id: string): string | string[] {
+  function getAnswer(id: string): string | number | string[] {
     return answers[id as keyof Answer] ?? (QUESTIONS[qIndex].type === "multi" ? [] : "");
   }
-  function setAnswer(id: string, value: string | string[]) {
+  function setAnswer(id: string, value: string | number | string[]) {
     setAnswers((prev) => ({ ...prev, [id]: value }));
   }
   function toggleMulti(id: string, value: string) {
@@ -200,7 +186,12 @@ export default function GeneratePage() {
   }
   function canAdvance(): boolean {
     const val = getAnswer(question.id);
-    if (question.type === "text") return (val as string).trim().length > 0;
+    if (question.type === "text") {
+      if (NUMERIC_QUESTION_IDS.has(question.id)) {
+        return Number(val) > 0;
+      }
+      return String(val).trim().length > 0;
+    }
     if (question.type === "multi") return (val as string[]).length > 0;
     return (val as string).length > 0;
   }
@@ -308,17 +299,28 @@ export default function GeneratePage() {
             <input
               type="text"
               placeholder={question.placeholder}
-              value={getAnswer(question.id) as string}
-              onChange={(e) => setAnswer(question.id, e.target.value)}
+              inputMode={NUMERIC_QUESTION_IDS.has(question.id) ? "numeric" : "text"}
+              pattern={NUMERIC_QUESTION_IDS.has(question.id) ? "[0-9]*" : undefined}
+              value={
+                NUMERIC_QUESTION_IDS.has(question.id)
+                  ? ((getAnswer(question.id) as number) > 0 ? String(getAnswer(question.id)) : "")
+                  : String(getAnswer(question.id))
+              }
+              onChange={(e) => {
+                if (NUMERIC_QUESTION_IDS.has(question.id)) {
+                  const digitsOnly = e.target.value.replace(/[^0-9]/g, "");
+                  setAnswer(question.id, digitsOnly ? Number(digitsOnly) : 0);
+                } else {
+                  setAnswer(question.id, e.target.value);
+                }
+              }}
               onKeyDown={(e) => e.key === "Enter" && canAdvance() && goNext()}
               autoFocus
               className="w-full px-4 py-4 rounded-2xl text-base outline-none border-2 transition-colors"
               style={{
                 background: "var(--white)",
                 color: "var(--text)",
-                borderColor: (getAnswer(question.id) as string).trim()
-                  ? "var(--blue)"
-                  : "var(--border)",
+                borderColor: canAdvance() ? "var(--blue)" : "var(--border)",
               }}
             />
           )}
@@ -530,15 +532,16 @@ export default function GeneratePage() {
           <div className="flex flex-wrap gap-2">
             {[
               answers.destination,
-              answers.travelWith,
+              `${answers.travelWith} traveller${answers.travelWith === 1 ? "" : "s"}`,
               answers.pace,
-              answers.budget,
+              `${answers.tripLength} day${answers.tripLength === 1 ? "" : "s"}`,
+              `MYR ${answers.budget}`,
               ...answers.interests.slice(0, 3),
             ]
               .filter(Boolean)
               .map((tag) => (
                 <span
-                  key={tag}
+                  key={String(tag)}
                   className="px-3 py-1 rounded-full text-xs font-semibold"
                   style={{ background: "var(--blue-light)", color: "var(--blue)" }}
                 >
