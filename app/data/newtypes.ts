@@ -1,5 +1,17 @@
 // this should be new app/data/itineraries.ts
 
+export type Answer = {
+    destination: string;
+    travelWith: number;
+    tripLength: number;
+    pace: string;
+    budget: number;
+    interests: string[];
+    accommodation: string;
+    foodStyle: string;
+    avoids: string[];
+};
+
 export type Stop = {
     time: string;
     name: string;

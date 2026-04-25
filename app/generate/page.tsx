@@ -2,21 +2,13 @@
 import { useState } from "react";
 import Link from "next/link";
 import BottomNav from "../components/BottomNav";
+import { generateDecisionAnalysisAction } from "./actions";
+import type { Answer, DecisionAnalysis } from "../data/newtypes";
+import { upsertDecisionAnalysis } from "../lib/decision-analysis-storage";
 
 /* ─── Types ─────────────────────────────────────────────────── */
 type FlowStep = "quiz" | "loading" | "result";
-
-type Answer = {
-  destination: string;
-  travelWith: string;
-  tripLength: string;
-  pace: string;
-  budget: string;
-  interests: string[];
-  accommodation: string;
-  foodStyle: string;
-  avoids: string[];
-};
+const NUMERIC_QUESTION_IDS = new Set(["travelWith", "tripLength", "budget"]);
 
 /* ─── Quiz questions ─────────────────────────────────────────── */
 const QUESTIONS = [
@@ -33,29 +25,19 @@ const QUESTIONS = [
     id: "travelWith",
     step: 2,
     emoji: "👥",
-    title: "Who are you travelling with?",
-    subtitle: "This shapes the whole trip.",
-    type: "single" as const,
-    options: [
-      { label: "Just me", icon: "🙋" },
-      { label: "My partner", icon: "💑" },
-      { label: "Friends", icon: "🤝" },
-      { label: "Family", icon: "👨‍👩‍👧" },
-    ],
+    title: "How many people are travelling?",
+    subtitle: "We need the exact party size to calculate total costs.",
+    type: "text" as const,
+    placeholder: "e.g. 1, 2, 4...",
   },
   {
     id: "tripLength",
     step: 3,
     emoji: "📅",
-    title: "How long is your trip?",
-    subtitle: "We'll pack in just the right amount.",
-    type: "single" as const,
-    options: [
-      { label: "Weekend (2 days)", icon: "⚡" },
-      { label: "Short trip (3–4 days)", icon: "🎒" },
-      { label: "One week", icon: "✈️" },
-      { label: "Two weeks+", icon: "🗺️" },
-    ],
+    title: "How many days is your trip?",
+    subtitle: "Used to calculate your daily allowable budget.",
+    type: "text" as const,
+    placeholder: "e.g. 3",
   },
   {
     id: "pace",
@@ -74,15 +56,10 @@ const QUESTIONS = [
     id: "budget",
     step: 5,
     emoji: "💳",
-    title: "What's your budget feel?",
-    subtitle: "No judgement — just helps us pick the right spots.",
-    type: "single" as const,
-    options: [
-      { label: "Budget-friendly", icon: "🪙" },
-      { label: "Mid-range", icon: "💵" },
-      { label: "Comfortable splurge", icon: "✨" },
-      { label: "Go all out", icon: "💎" },
-    ],
+    title: "What is your strict maximum budget?",
+    subtitle: "Enter the total MYR amount. We will optimize to stay under this.",
+    type: "text" as const,
+    placeholder: "e.g. 1500",
   },
   {
     id: "interests",
@@ -172,10 +149,10 @@ const RESULT = {
 /* ─── Default answers ────────────────────────────────────────── */
 const defaultAnswers: Answer = {
   destination: "",
-  travelWith: "",
-  tripLength: "",
+  travelWith: 0,
+  tripLength: 0,
   pace: "",
-  budget: "",
+  budget: 0,
   interests: [],
   accommodation: "",
   foodStyle: "",
@@ -187,15 +164,17 @@ export default function GeneratePage() {
   const [flowStep, setFlowStep] = useState<FlowStep>("quiz");
   const [qIndex, setQIndex] = useState(0);
   const [answers, setAnswers] = useState<Answer>({ ...defaultAnswers });
+  const [analysis, setAnalysis] = useState<DecisionAnalysis | null>(null);
+  const [analysisKey, setAnalysisKey] = useState<string | null>(null);
 
   const question = QUESTIONS[qIndex];
   const isLast = qIndex === QUESTIONS.length - 1;
 
   /* Helpers */
-  function getAnswer(id: string): string | string[] {
+  function getAnswer(id: string): string | number | string[] {
     return answers[id as keyof Answer] ?? (QUESTIONS[qIndex].type === "multi" ? [] : "");
   }
-  function setAnswer(id: string, value: string | string[]) {
+  function setAnswer(id: string, value: string | number | string[]) {
     setAnswers((prev) => ({ ...prev, [id]: value }));
   }
   function toggleMulti(id: string, value: string) {
@@ -207,14 +186,34 @@ export default function GeneratePage() {
   }
   function canAdvance(): boolean {
     const val = getAnswer(question.id);
-    if (question.type === "text") return (val as string).trim().length > 0;
+    if (question.type === "text") {
+      if (NUMERIC_QUESTION_IDS.has(question.id)) {
+        return Number(val) > 0;
+      }
+      return String(val).trim().length > 0;
+    }
     if (question.type === "multi") return (val as string[]).length > 0;
     return (val as string).length > 0;
   }
-  function goNext() {
+  async function goNext() {
     if (isLast) {
       setFlowStep("loading");
-      setTimeout(() => setFlowStep("result"), 3000);
+      try {
+        const nextAnalysis = await generateDecisionAnalysisAction(answers);
+        console.log("[GeneratePage] Decision analysis request completed", {
+          analysisId: nextAnalysis.analysisId,
+          optionCount: nextAnalysis.options.length,
+        });
+        setAnalysis(nextAnalysis);
+        const savedKey = upsertDecisionAnalysis(nextAnalysis);
+        setAnalysisKey(savedKey);
+        console.log("[GeneratePage] Decision analysis saved to localStorage entry", {
+          storageKey: savedKey,
+          analysisId: nextAnalysis.analysisId,
+        });
+      } finally {
+        setFlowStep("result");
+      }
     } else {
       setQIndex((i) => i + 1);
     }
@@ -224,9 +223,34 @@ export default function GeneratePage() {
   }
   function restart() {
     setAnswers({ ...defaultAnswers });
+    setAnalysis(null);
     setQIndex(0);
     setFlowStep("quiz");
   }
+
+  const primaryOption = analysis?.options.find((option) => option.id === analysis.primaryRecommendationId) ?? analysis?.options[0];
+  const resultTitle = primaryOption?.title ?? RESULT.title;
+  const resultTagline = primaryOption?.tagline ?? RESULT.tagline;
+  const resultSummary = analysis?.economicRationale ?? RESULT.summary;
+  const hiddenCostsAvoided = analysis?.hiddenCostsAvoided ?? 0;
+  const totalStops =
+    primaryOption?.days.reduce((acc, day) => acc + day.stops.length, 0) ?? RESULT.stats.stops;
+  const totalDays = primaryOption?.days.length ?? RESULT.stats.days;
+  const cafeStops =
+    primaryOption?.days.reduce(
+      (acc, day) =>
+        acc +
+        day.stops.filter((stop) => stop.category.toLowerCase().includes("cafe") || stop.category.toLowerCase().includes("caf")).length,
+      0,
+    ) ?? RESULT.stats.cafes;
+  const estimatedWalkingKm =
+    primaryOption ? (totalStops * 0.75).toFixed(1) : RESULT.stats.walkingKm;
+  const highlights =
+    primaryOption?.days
+      .flatMap((day) => day.stops)
+      .slice(0, 5)
+      .map((stop) => `${stop.name} (${stop.category})`) ?? RESULT.highlights;
+  const itineraryDetailsId = analysisKey ?? analysis?.analysisId ?? RESULT.id;
 
   /* ── Quiz screen ── */
   if (flowStep === "quiz") {
@@ -275,17 +299,28 @@ export default function GeneratePage() {
             <input
               type="text"
               placeholder={question.placeholder}
-              value={getAnswer(question.id) as string}
-              onChange={(e) => setAnswer(question.id, e.target.value)}
+              inputMode={NUMERIC_QUESTION_IDS.has(question.id) ? "numeric" : "text"}
+              pattern={NUMERIC_QUESTION_IDS.has(question.id) ? "[0-9]*" : undefined}
+              value={
+                NUMERIC_QUESTION_IDS.has(question.id)
+                  ? ((getAnswer(question.id) as number) > 0 ? String(getAnswer(question.id)) : "")
+                  : String(getAnswer(question.id))
+              }
+              onChange={(e) => {
+                if (NUMERIC_QUESTION_IDS.has(question.id)) {
+                  const digitsOnly = e.target.value.replace(/[^0-9]/g, "");
+                  setAnswer(question.id, digitsOnly ? Number(digitsOnly) : 0);
+                } else {
+                  setAnswer(question.id, e.target.value);
+                }
+              }}
               onKeyDown={(e) => e.key === "Enter" && canAdvance() && goNext()}
               autoFocus
               className="w-full px-4 py-4 rounded-2xl text-base outline-none border-2 transition-colors"
               style={{
                 background: "var(--white)",
                 color: "var(--text)",
-                borderColor: (getAnswer(question.id) as string).trim()
-                  ? "var(--blue)"
-                  : "var(--border)",
+                borderColor: canAdvance() ? "var(--blue)" : "var(--border)",
               }}
             />
           )}
@@ -444,9 +479,9 @@ export default function GeneratePage() {
         </div>
 
         <h1 className="text-xl font-bold leading-snug mb-1" style={{ color: "var(--text)" }}>
-          {RESULT.title}
+          {resultTitle}
         </h1>
-        <p className="text-sm" style={{ color: "var(--muted)" }}>{RESULT.tagline}</p>
+        <p className="text-sm" style={{ color: "var(--muted)" }}>{resultTagline}</p>
       </header>
 
       <div className="px-5 flex flex-col gap-5">
@@ -457,17 +492,22 @@ export default function GeneratePage() {
           style={{ background: "var(--blue-xlight)", border: "1px solid var(--blue-border)" }}
         >
           <p className="text-sm leading-relaxed" style={{ color: "var(--text-secondary)" }}>
-            {RESULT.summary}
+            {resultSummary}
           </p>
+          {analysis && (
+            <p className="text-xs font-semibold mt-3" style={{ color: "var(--blue)" }}>
+              Hidden costs avoided: ${hiddenCostsAvoided}
+            </p>
+          )}
         </div>
 
         {/* Stats */}
         <div className="grid grid-cols-4 gap-2">
           {[
-            { label: "Stops", value: RESULT.stats.stops, icon: "📍" },
-            { label: "Days", value: RESULT.stats.days, icon: "📅" },
-            { label: "km walk", value: RESULT.stats.walkingKm, icon: "🚶" },
-            { label: "Cafés", value: RESULT.stats.cafes, icon: "☕" },
+            { label: "Stops", value: totalStops, icon: "📍" },
+            { label: "Days", value: totalDays, icon: "📅" },
+            { label: "km walk", value: estimatedWalkingKm, icon: "🚶" },
+            { label: "Cafés", value: cafeStops, icon: "☕" },
           ].map((s) => (
             <div
               key={s.label}
@@ -492,15 +532,16 @@ export default function GeneratePage() {
           <div className="flex flex-wrap gap-2">
             {[
               answers.destination,
-              answers.travelWith,
+              `${answers.travelWith} traveller${answers.travelWith === 1 ? "" : "s"}`,
               answers.pace,
-              answers.budget,
+              `${answers.tripLength} day${answers.tripLength === 1 ? "" : "s"}`,
+              `MYR ${answers.budget}`,
               ...answers.interests.slice(0, 3),
             ]
               .filter(Boolean)
               .map((tag) => (
                 <span
-                  key={tag}
+                  key={String(tag)}
                   className="px-3 py-1 rounded-full text-xs font-semibold"
                   style={{ background: "var(--blue-light)", color: "var(--blue)" }}
                 >
@@ -513,10 +554,10 @@ export default function GeneratePage() {
         {/* Highlights */}
         <div>
           <p className="text-xs font-bold tracking-widest uppercase mb-3" style={{ color: "var(--muted)" }}>
-            What's included
+            What&apos;s included
           </p>
           <div className="flex flex-col gap-2">
-            {RESULT.highlights.map((h, i) => (
+            {highlights.map((h, i) => (
               <div
                 key={i}
                 className="flex items-center gap-3 py-3 px-4 rounded-2xl"
@@ -535,7 +576,7 @@ export default function GeneratePage() {
         </div>
 
         {/* CTAs */}
-        <Link href={`/itinerary/${RESULT.id}`}>
+        <Link href={`/itinerary/${itineraryDetailsId}`}>
           <button
             className="w-full py-4 rounded-2xl text-base font-bold text-white"
             style={{ background: "linear-gradient(135deg, #3b9ede 0%, #5ab0e8 100%)" }}

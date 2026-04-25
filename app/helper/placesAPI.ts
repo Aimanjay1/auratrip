@@ -9,11 +9,18 @@ type GooglePlace = any; // keep loose to avoid overly specific typings for now
  * Important: this function intentionally preserves the content/shape of the
  * request body exactly as supplied in the prompt. Do NOT change the payload.
  */
-export async function searchNearbyStops(apiKey: string, latitude: number, longitude: number, radiusMeters = 500, maxResultCount = 3): Promise<Stop[]> {
+export async function searchNearbyStops(
+  apiKey: string,
+  latitude: number,
+  longitude: number,
+  category: string,
+  radiusMeters = 2000,
+  maxResultCount = 5,
+): Promise<Stop[]> {
   const url = "https://places.googleapis.com/v1/places:searchNearby";
 
   const body = {
-    includedTypes: ["restaurant"],
+    includedTypes: [category],
     maxResultCount: maxResultCount,
     locationRestriction: {
       circle: {
@@ -32,7 +39,7 @@ export async function searchNearbyStops(apiKey: string, latitude: number, longit
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "X-Goog-Api-Key": "AIzaSyDK2nDf-iM6aD65IgytKyml54m7HWYyaZM",
+      "X-Goog-Api-Key": apiKey,
       "X-Goog-FieldMask": fieldMask,
     },
     body: JSON.stringify(body),
@@ -81,7 +88,7 @@ export async function searchNearbyStops(apiKey: string, latitude: number, longit
     const stop: Stop = {
       time: "",
       name: displayName,
-      category: "restaurant",
+      category,
       duration: "",
       mapUrl: mapUrl,
       address: address,
