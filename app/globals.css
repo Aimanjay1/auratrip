@@ -1,0 +1,81 @@
+@import "tailwindcss";
+
+:root {
+  /* Base */
+  --bg: #f7f9fc;
+  --white: #ffffff;
+
+  /* Light blue palette */
+  --blue: #3b9ede;
+  --blue-mid: #5ab0e8;
+  --blue-light: #e8f4fd;
+  --blue-xlight: #f0f8ff;
+  --blue-border: #bddff5;
+
+  /* Text */
+  --text: #1a2332;
+  --text-secondary: #4a5568;
+  --muted: #8a9bb0;
+
+  /* Surfaces */
+  --surface: #ffffff;
+  --surface2: #f0f5fa;
+  --border: #dde8f0;
+
+  /* Accent for cards (kept softly coloured) */
+  --accent: #3b9ede;
+}
+
+@theme inline {
+  --color-background: var(--bg);
+  --color-foreground: var(--text);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-geist-sans), system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  overscroll-behavior: none;
+}
+
+.app-shell {
+  max-width: 430px;
+  margin: 0 auto;
+  min-height: 100svh;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--blue-border); border-radius: 4px; }
+
+.no-scrollbar { scrollbar-width: none; }
+.no-scrollbar::-webkit-scrollbar { display: none; }
+
+/* Animations */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(20px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.3; }
+}
+
+.animate-fade-in { animation: fadeIn 0.35s ease both; }
+.animate-slide-up { animation: slideUp 0.4s ease both; }
